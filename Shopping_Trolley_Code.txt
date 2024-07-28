@@ -1,0 +1,265 @@
+#include <Arduino.h>
+#include <rdm6300.h>
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+
+#define RDM6300_RX_PIN 2 // Define the pin where the RFID reader is connected
+#define READ_LED_PIN 13  // Define the pin for the LED
+#define CONTROL_BUTTON_PIN 5 // Define the pin for the control button (add/remove)
+#define BUZZER_PIN 4 // Define the pin for the buzzer
+#define END_SHOPPING_BUTTON_PIN 6 // Define the pin for the end shopping button
+
+LiquidCrystal_I2C lcd(0x27, 16, 4);
+Rdm6300 rdm6300;
+
+// Define a structure to hold item information
+struct ItemInfo {
+  const char* name;
+  int price;
+};
+
+// Define your items with their RFID tag values, names, and prices
+ItemInfo items[] = {
+  {"Butter", 100},
+  {"Sugar", 80},
+  {"Dates", 120},
+  {"Eggs", 50},
+  {"Milk", 50},
+  // Add more items as needed
+};
+
+// RFID tag values associated with each item (replace with actual tag IDs)
+String tagValues[] = {
+  "8759103", // Example tag value for Butter
+  "8786802", // Example tag value for Sugar
+  "8766037", // Example tag value for Bread
+  "8767912", // Example tag value for Eggs
+  "8782358", // Example tag value for Water Bottle
+  // Add more tag values as needed
+};
+
+// Variables to keep track of the total price and the cart items
+int totalPrice = 0;
+String cartItems[5]; // Adjust size as needed
+int cartItemCount = 0;
+
+enum State { ADD, REMOVE }; // Enum to represent the state of the system
+State currentState = ADD; // Start in the ADD state
+
+void setup() {
+  lcd.begin();
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  Serial.begin(115200);
+
+  pinMode(READ_LED_PIN, OUTPUT);
+  digitalWrite(READ_LED_PIN, LOW);
+
+  pinMode(CONTROL_BUTTON_PIN, INPUT); // Set the control button pin as input
+  pinMode(BUZZER_PIN, OUTPUT); // Set the buzzer pin as output
+  pinMode(END_SHOPPING_BUTTON_PIN, INPUT); // Set the end shopping button pin as input
+
+  rdm6300.begin(RDM6300_RX_PIN);
+  lcd.setCursor(0, 0);
+  lcd.print("Welcome to Smart Shopping Cart"); 
+  delay(3000);
+
+  lcd.clear();
+  lcd.print("Scan the Tag of a Product...");
+  Serial.println("Scan the tag of a Product...");
+}
+
+void loop() {
+  static bool buttonPressed = false;
+  static bool endShoppingButtonPressed = false;
+
+  // Check if a new tag ID is detected
+  if (rdm6300.get_new_tag_id()) {
+    String currentTag = String(rdm6300.get_tag_id(), DEC); // Get the tag ID as a string in decimal format
+
+    // Beep the buzzer when a tag is scanned
+    beepBuzzer(1);
+
+    // Add or remove the item based on the current state
+    switch (currentState) {
+      case ADD:
+        addItem(currentTag);
+        break;
+      case REMOVE:
+        removeItem(currentTag);
+        break;
+    }
+  }
+
+  // Check the state of the control button (to switch between ADD and REMOVE modes)
+  if (digitalRead(CONTROL_BUTTON_PIN) == HIGH) { // Button pressed (with pull-down, HIGH means pressed)
+    if (!buttonPressed) {
+      buttonPressed = true;
+      // Toggle between add and remove states
+      if (currentState == ADD) {
+        currentState = REMOVE;
+        lcd.clear();
+        lcd.print("Switching to    REMOVE MODE...");
+        Serial.println("Switching to REMOVE MODE...");
+      } else {
+        currentState = ADD;
+        lcd.clear();
+        lcd.print("Switching to    ADD MODE...");
+        Serial.println("Switching to ADD MODE...");
+      }
+
+      // Beep the buzzer twice when switching modes
+      beepBuzzer(2);
+    }
+  } else {
+    buttonPressed = false;
+  }
+
+  // Check the state of the end shopping button
+  if (digitalRead(END_SHOPPING_BUTTON_PIN) == HIGH) { // Button pressed (with pull-down, HIGH means pressed)
+    if (!endShoppingButtonPressed) {
+      endShoppingButtonPressed = true;
+      endShopping();
+    }
+  } else {
+    endShoppingButtonPressed = false;
+  }
+
+  // Update LED state based on tag presence
+  digitalWrite(READ_LED_PIN, rdm6300.get_tag_id());
+
+  delay(10);
+}
+
+// Function to add an item to the cart
+void addItem(String tag) {
+  // Check if the tag is already in the cart
+  /*for (int i = 0; i < cartItemCount; i++) {
+    if (cartItems[i] == tag) {
+      Serial.println("Item already in the cart.");
+      return;
+    }
+  }*/
+
+  // Find the item corresponding to the tag
+  for (int i = 0; i < sizeof(tagValues) / sizeof(tagValues[0]); i++) {
+    if (tag == tagValues[i]) {
+      // Add the item to the cart
+      totalPrice += items[i].price;
+      cartItems[cartItemCount++] = tag; // Add the tag to the list
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print(items[i].name);
+      Serial.print(items[i].name);
+      lcd.print(" added");
+      lcd.setCursor(0, 1);
+      lcd.print(" Price(Rs.):");
+      Serial.print(" added, Price: $");
+      lcd.setCursor(12, 1);
+      lcd.print(items[i].price);
+      Serial.println(items[i].price);
+      lcd.setCursor(-4, 3);
+      lcd.print("Total(Rs.): ");
+      Serial.print("Total Price: $");
+      lcd.print(totalPrice);
+      Serial.println(totalPrice);
+      return;
+    }
+  }
+
+  // If the tag does not match any item
+  lcd.clear();
+  lcd.print("Unknown item scanned.");
+  Serial.println("Unknown item scanned.");
+}
+
+// Function to remove an item from the cart
+void removeItem(String tag) {
+  // Check if the tag is in the cart
+  for (int i = 0; i < cartItemCount; i++) {
+    if (cartItems[i] == tag) {
+      // Find the corresponding item information
+      for (int j = 0; j < sizeof(tagValues) / sizeof(tagValues[0]); j++) {
+        if (tag == tagValues[j]) {
+          // Remove the item from the cart
+          totalPrice -= items[j].price;
+          lcd.clear();
+          lcd.print(items[j].name);
+          Serial.print(items[j].name);
+          lcd.print(" Removed ");
+          Serial.print(" Removed ");
+          lcd.setCursor(0, 1);
+          lcd.print(" Price(Rs.): ");
+          Serial.print(", Price(Rs.)");
+          lcd.print(items[j].price);
+          Serial.println(items[j].price);
+
+          // Shift remaining items to fill the gap
+          for (int k = i; k < cartItemCount - 1; k++) {
+            cartItems[k] = cartItems[k + 1];
+          }
+          cartItemCount--; // Decrease the item count
+          cartItems[cartItemCount] = ""; // Clear the last element
+
+          // Print the updated total price
+          lcd.setCursor(-4, 2);
+          lcd.print("Payable Amount ");
+          Serial.print("Total Price after removal: Rs.");
+          lcd.setCursor(-4, 3);
+          lcd.print("  Rs. ");
+          lcd.print(totalPrice);
+          Serial.println(totalPrice);
+          return;
+        }
+      }
+    }
+  }
+  // If the tag was not found in the cart
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Item not found  in the cart.");
+  Serial.println("Item not found in the cart.");
+}
+
+// Function to beep the buzzer
+void beepBuzzer(int times) {
+  for (int i = 0; i < times; i++) {
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(300);
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(100); // Short pause between beeps if multiple
+  }
+}
+
+// Function to end shopping, display total bill, and reset the cart
+void endShopping() {
+  // Display the total bill
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Total Bill");
+  lcd.setCursor(3, 1);
+  lcd.print("Rs. : ");
+  Serial.print("Total Bill (Rs.): ");
+  lcd.setCursor(10, 1);
+  lcd.print(totalPrice);
+  Serial.println(totalPrice);
+
+  // Beep the buzzer three times to indicate end of shopping
+  beepBuzzer(3);
+
+  // Wait for 3 seconds before resetting
+  delay(3000);
+
+  // Reset the cart
+  totalPrice = 0;
+  cartItemCount = 0;
+  for (int i = 0; i < sizeof(cartItems) / sizeof(cartItems[0]); i++) {
+    cartItems[i] = "";
+  }
+
+  // Display the message that the cart is ready for use
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Cart is ready   for use...");
+  Serial.println("Cart is ready for use...");
+}
